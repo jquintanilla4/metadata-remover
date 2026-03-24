@@ -45,7 +45,8 @@ This runs `uv run python app.py`, which auto-installs dependencies into a virtua
 app.py                  — entire application (single file)
 pyproject.toml          — project metadata and dependencies
 metadata_remover.spec   — PyInstaller build spec
-Makefile                — run/build/clean shortcuts
+build_app.sh            — assembles a macOS .app bundle from the binary
+Makefile                — run/build/app/clean shortcuts
 ```
 
 ## Building a Standalone Binary
@@ -60,6 +61,23 @@ This produces a single binary at `dist/metadata-remover`. The build:
 
 1. Installs the `build` optional dependency group (PyInstaller)
 2. Bundles the app + Textual data files into one executable
+
+### Building a macOS .app Bundle
+
+To create a double-clickable `Metadata Remover.app` that opens Terminal and launches the TUI:
+
+```bash
+make app
+```
+
+This runs the PyInstaller build and then wraps the binary in a `.app` bundle at `dist/Metadata Remover.app`. To distribute it, zip it up:
+
+```bash
+cd dist
+zip -r "Metadata Remover.zip" "Metadata Remover.app"
+```
+
+The recipient unzips and double-clicks the app. On first launch, macOS will block it since it's unsigned — they just need to right-click the app and select **Open** once to bypass Gatekeeper.
 
 ### Clean build artifacts
 
