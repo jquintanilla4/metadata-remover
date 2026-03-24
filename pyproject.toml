@@ -1,0 +1,13 @@
+[project]
+name = "metadata-remover"
+version = "1.0.0"
+description = "TUI app to strip metadata from video files using ffmpeg"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=1.0.0",
+]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller>=6.0",
+]
