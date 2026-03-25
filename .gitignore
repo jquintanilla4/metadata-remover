@@ -5,6 +5,12 @@ __pycache__/
 dist/
 build/
 
+# Node / Electron
+node_modules/
+.webpack/
+out/
+npm-debug.log*
+
 # uv
 .venv/
 uv.lock

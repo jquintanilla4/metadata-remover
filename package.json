@@ -1,0 +1,40 @@
+{
+  "name": "metadata-remover",
+  "productName": "Metadata Remover",
+  "version": "3.0.0",
+  "description": "Desktop app to strip metadata from video files using ffmpeg",
+  "main": ".webpack/main",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "node ./node_modules/@electron-forge/cli/dist/electron-forge.js start",
+    "package": "node ./node_modules/@electron-forge/cli/dist/electron-forge.js package",
+    "make": "node ./node_modules/@electron-forge/cli/dist/electron-forge.js make",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf .webpack out"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-dmg": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron-forge/plugin-webpack": "^7.11.1",
+    "@electron-forge/shared-types": "^7.11.1",
+    "@electron/fuses": "^2.1.0",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vercel/webpack-asset-relocator-loader": "^1.10.0",
+    "css-loader": "^7.1.4",
+    "electron": "^41.0.4",
+    "node-loader": "^2.1.0",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.4",
+    "typescript": "^6.0.2"
+  }
+}
