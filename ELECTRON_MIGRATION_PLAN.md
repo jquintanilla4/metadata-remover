@@ -2,7 +2,7 @@
 
 ## Summary
 
-Replace the current `pywebview` app with a macOS-first Electron app using Electron Forge, React, and TypeScript. Keep the existing product behavior: drag/drop or browse for a video, strip metadata with the same `ffmpeg` flags, stream logs live, and save a `_clean` output next to the source file.
+Replace the original desktop app with a macOS-first Electron app using Electron Forge, React, and TypeScript. Keep the existing product behavior: drag/drop or browse for a video, strip metadata with the same `ffmpeg` flags, stream logs live, and save a `_clean` output next to the source file.
 
 Use the user's installed `ffmpeg`. If it is missing and Homebrew exists, offer a one-click `brew install ffmpeg`. If Homebrew is missing, do not auto-install it; show the official Homebrew install command and link instead.
 
@@ -12,7 +12,7 @@ Use the user's installed `ffmpeg`. If it is missing and Homebrew exists, offer a
 - Move filesystem access, dependency checks, dialogs, and subprocesses into the Electron main process
 - Expose a narrow preload bridge to the renderer
 - Preserve the current UI flow: dependency overlay, browse/paste/drag-and-drop, live logs, and new-session reset
-- Keep the legacy Python app in the repo during the migration as a reference and fallback
+- The legacy Python implementation has been removed and Electron is now the only app runtime in the repo
 
 ## Public Interfaces
 

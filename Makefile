@@ -1,4 +1,4 @@
-.PHONY: run build app typecheck clean legacy-run legacy-build
+.PHONY: run build app typecheck clean
 
 run:
 	npm start
@@ -13,11 +13,4 @@ typecheck:
 	npm run typecheck
 
 clean:
-	rm -rf .webpack/ out/ build/ dist/ __pycache__/
-
-legacy-run:
-	uv run python app.py
-
-legacy-build:
-	uv sync --extra build
-	uv run pyinstaller metadata_remover.spec --clean
+	rm -rf .webpack/ out/

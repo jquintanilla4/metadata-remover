@@ -1,14 +1,14 @@
 # Metadata Remover
 
-A macOS-first Electron desktop app that strips all metadata from video files using the user's installed `ffmpeg`.
+A macOS-first Electron desktop app that strips metadata from video files with the user's installed `ffmpeg`.
 
-The app keeps the same product shape as the original Python version:
+## Features
 
 - Drag and drop a video file into the app
-- Or browse for a file
-- Or paste a file path manually
+- Browse for a file with the native macOS file picker
+- Paste a file path manually
 - Stream `ffmpeg` output live in the UI
-- Save a clean copy next to the original with a `_clean` suffix
+- Save the cleaned copy next to the original with a `_clean` suffix
 
 ## How It Works
 
@@ -30,7 +30,7 @@ If `output_clean.ext` already exists, the app writes `output_clean_1.ext`, `outp
 
 ## ffmpeg Dependency Flow
 
-The Electron app uses the user's local `ffmpeg`.
+The app uses the user's local `ffmpeg`.
 
 On startup it checks:
 
@@ -45,21 +45,19 @@ If `ffmpeg` is missing on macOS:
 
 ## Development
 
-### Install dependencies
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-### Run the Electron app
+Run the Electron app:
 
 ```bash
 make run
 ```
 
-This runs `npm start`.
-
-### Typecheck
+Typecheck:
 
 ```bash
 make typecheck
@@ -67,40 +65,24 @@ make typecheck
 
 ## Packaging
 
-### Package the app
+Package the app:
 
 ```bash
 make build
 ```
 
-This runs `npm run package` and produces a packaged app bundle under `out/`.
+This runs `npm run package` and writes the packaged app under `out/`.
 
-### Make macOS distributables
+Make macOS distributables:
 
 ```bash
 make app
 ```
 
-This runs `npm run make` and produces distributables under `out/make`, including:
+This runs `npm run make` and writes distributables under `out/make`, including:
 
 - a `.zip`
 - a `.dmg`
-
-## Legacy Python App
-
-The original Python implementation is still in the repo during the migration:
-
-- `app.py`
-- `pyproject.toml`
-- `metadata_remover.spec`
-- `build_app.sh`
-
-Legacy commands:
-
-```bash
-make legacy-run
-make legacy-build
-```
 
 ## Project Structure
 
