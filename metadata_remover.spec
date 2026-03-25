@@ -1,24 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
-
-textual_datas = collect_data_files("textual")
 
 a = Analysis(
     ["app.py"],
     pathex=[],
     binaries=[],
-    datas=textual_datas,
+    datas=[],
     hiddenimports=[
-        "textual.widgets",
-        "textual.screen",
-        "textual.containers",
-        "textual._ansi_theme",
+        "webview",
         "zlib",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest"],
+    excludes=["tkinter", "unittest", "textual"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -33,6 +27,6 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=False,
     target_arch=None,
 )

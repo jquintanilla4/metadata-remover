@@ -37,13 +37,11 @@ BINARY="$DIR/metadata-remover"
 # Strip quarantine flag from the binary (handles "downloaded from internet" block)
 xattr -cr "$BINARY" 2>/dev/null
 
-# Open Terminal and run the TUI binary
-osascript -e "
-tell application \"Terminal\"
-    activate
-    do script \"'$BINARY'; exit\"
-end tell
-"
+# Ensure common tool paths are available (macOS .app bundles don't inherit shell PATH)
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# pywebview opens its own native window — no terminal needed
+exec "$BINARY"
 LAUNCHER
 chmod +x "$MACOS_DIR/launcher"
 
@@ -67,7 +65,7 @@ cat > "$CONTENTS_DIR/Info.plist" << PLIST
     <string>$VERSION</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>LSUIElement</key>
+    <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>10.15</string>

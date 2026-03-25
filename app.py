@@ -2,87 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
-from textual import on, work
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
-from textual.theme import Theme
-from textual.strip import Strip
-from textual.widget import Widget
-from textual.widgets import (
-    Button,
-    DirectoryTree,
-    Input,
-    ProgressBar,
-    RichLog,
-    Static,
-)
+import webview
 
-from rich.segment import Segment
-from rich.style import Style
-
-
-class GridBackground(Widget):
-    """Fills the screen with a repeating + grid pattern."""
-
-    DEFAULT_CSS = """
-    GridBackground {
-        width: 1fr;
-        height: 1fr;
-        layer: below;
-    }
-    """
-
-    GRID_X = 6   # horizontal chars between +
-    GRID_Y = 3   # vertical rows between + (approx square with 2:1 char ratio)
-
-    def render_line(self, y: int) -> Strip:
-        width = self.size.width
-        style = Style(color="#222222")
-        if y % self.GRID_Y == 0:
-            text = "".join("+" if x % self.GRID_X == 0 else " " for x in range(width))
-            return Strip([Segment(text, style)])
-        return Strip([Segment(" " * width, style)])
-
-CYBER_THEME = Theme(
-    name="cyberpunk",
-    primary="#ff2a6d",       # hot pink / neon magenta
-    secondary="#05d9e8",     # electric cyan
-    accent="#d300c5",        # neon purple
-    foreground="#d1f7ff",    # pale ice blue
-    background="#000000",    # pure black
-    success="#00ff9f",       # neon green
-    warning="#f9f002",       # neon yellow
-    error="#ff2a6d",         # hot pink
-    surface="#12121e",       # dark panel
-    panel="#1a1a2e",         # slightly lighter panel
-    dark=True,
-    variables={
-        "block-cursor-text-style": "none",
-        "footer-background": "#12121e",
-        "footer-key-foreground": "#05d9e8",
-        "footer-key-background": "#1a1a2e",
-        "footer-description-foreground": "#d1f7ff 70%",
-        "footer-description-background": "#12121e",
-        "input-cursor-foreground": "#ff2a6d",
-        "input-selection-background": "#d300c5 30%",
-        "scrollbar-color": "#05d9e8 30%",
-        "scrollbar-color-hover": "#05d9e8 60%",
-        "scrollbar-color-active": "#ff2a6d",
-    },
-)
+# ─── Constants ───────────────────────────────────────────────────
 
 SUPPORTED_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv",
     ".webm", ".m4v", ".mpg", ".mpeg", ".3gp", ".ts",
 }
 
+
+# ─── Utility functions ───────────────────────────────────────────
 
 def get_output_path(input_path: Path) -> Path:
     """Return a non-colliding *_clean* output path next to the original."""
@@ -124,559 +62,606 @@ def find_brew() -> str | None:
     return None
 
 
-
-class ConfirmScreen(Screen[bool]):
-    """A reusable yes / no confirmation dialog."""
-
-    DEFAULT_CSS = """
-    ConfirmScreen {
-        align: center middle;
-    }
-    #confirm-box {
-        width: 60;
-        height: auto;
-        border: solid $accent;
-        padding: 1 2;
-        background: $surface;
-    }
-    #confirm-message {
-        width: 100%;
-        margin-bottom: 1;
-        text-align: center;
-        color: $foreground;
-    }
-    #confirm-buttons {
-        height: 3;
-        align: center middle;
-    }
-    #confirm-buttons Button {
-        margin: 0 2;
-        background: $panel;
-        color: $foreground;
-        border: none;
-        min-width: 12;
-        text-style: bold;
-    }
-    #confirm-buttons #yes {
-        background: $success 20%;
-        color: $success;
-    }
-    #confirm-buttons #yes:hover {
-        background: $success 35%;
-    }
-    #confirm-buttons #no {
-        background: $error 20%;
-        color: $error;
-    }
-    #confirm-buttons #no:hover {
-        background: $error 35%;
-    }
-    """
-
-    def __init__(self, message: str) -> None:
-        self.message = message
-        super().__init__()
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-box"):
-            yield Static(self.message, id="confirm-message")
-            with Horizontal(id="confirm-buttons"):
-                yield Button("Yes", id="yes", variant="success")
-                yield Button("No", id="no", variant="error")
-
-    @on(Button.Pressed, "#yes")
-    def handle_yes(self) -> None:
-        self.dismiss(True)
-
-    @on(Button.Pressed, "#no")
-    def handle_no(self) -> None:
-        self.dismiss(False)
+def find_ffmpeg() -> str | None:
+    """Return the path to ffmpeg, checking common locations."""
+    ff = shutil.which("ffmpeg")
+    if ff:
+        return ff
+    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
-class DependencyScreen(Screen[bool]):
-    """Check for ffmpeg and offer to install it if missing."""
+# ─── HTML ────────────────────────────────────────────────────────
 
-    DEFAULT_CSS = """
-    DependencyScreen {
-        align: center middle;
-    }
-    #dep-box {
-        width: 70;
-        height: auto;
-        border: solid $accent;
-        padding: 1 2;
-        background: $surface;
-    }
-    #dep-status {
-        width: 100%;
-        text-align: center;
-        margin-bottom: 1;
-        color: $foreground;
-    }
-    #dep-buttons {
-        height: 3;
-        align: center middle;
-        margin-top: 1;
-    }
-    #dep-buttons Button {
-        margin: 0 2;
-        border: none;
-        min-width: 16;
-        text-style: bold;
-    }
-    #dep-buttons #install {
-        background: $success 20%;
-        color: $success;
-    }
-    #dep-buttons #install:hover {
-        background: $success 35%;
-    }
-    #dep-buttons #quit {
-        background: $error 20%;
-        color: $error;
-    }
-    #dep-buttons #quit:hover {
-        background: $error 35%;
-    }
-    #dep-log {
-        height: 14;
-        border: solid $panel;
-        margin-top: 1;
-        display: none;
-        background: $background;
-    }
-    """
+HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Metadata Remover</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700&display=swap');
 
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dep-box"):
-            yield Static("Checking for ffmpeg...", id="dep-status")
-            yield RichLog(id="dep-log", highlight=True, markup=True)
-            with Horizontal(id="dep-buttons"):
-                yield Button("Install ffmpeg", id="install", variant="success")
-                yield Button("Quit", id="quit", variant="error")
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    def on_mount(self) -> None:
-        self.query_one("#install", Button).display = False
-        self.query_one("#quit", Button).display = False
-        self.check_ffmpeg()
+  body {
+    background: #0d1017;
+    color: #bfbdb6;
+    font-family: 'DM Sans', -apple-system, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 40px 20px;
+    overflow-y: auto;
+  }
 
-    @work(thread=True)
-    def check_ffmpeg(self) -> None:
-        if shutil.which("ffmpeg"):
-            self.app.call_from_thread(self._ffmpeg_found)
-        else:
-            self.app.call_from_thread(self._ffmpeg_missing)
+  #container {
+    width: 100%;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
 
-    def _ffmpeg_found(self) -> None:
-        self._dismiss_success("[$success]ffmpeg found![/$success] Launching...")
+  /* ---- Header / Title ---- */
+  #header {
+    text-align: center;
+    padding: 0 0 4px 0;
+  }
+  #title {
+    font-size: 32px;
+    font-weight: 700;
+    color: #bfbdb6;
+    letter-spacing: -0.5px;
+  }
+  #title span { color: #e6b450; }
+  #subtitle {
+    margin-top: 6px;
+    font-size: 13px;
+    font-weight: 300;
+    color: #565b66;
+  }
 
-    def _dismiss_success(self, message: str) -> None:
-        self.query_one("#dep-status", Static).update(message)
-        self.query_one("#install", Button).display = False
-        self.query_one("#quit", Button).display = False
-        self.set_timer(0.8, lambda: self.dismiss(True))
+  /* ---- Dependency Overlay ---- */
+  #dep-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: rgba(13, 16, 23, 0.96);
+    justify-content: center;
+    align-items: center;
+  }
+  #dep-overlay.visible { display: flex; }
+  #dep-box {
+    background: #131620;
+    border: 1px solid #1a1e2a;
+    border-radius: 10px;
+    padding: 28px 32px;
+    text-align: center;
+    max-width: 420px;
+    width: 90%;
+  }
+  #dep-status { margin-bottom: 16px; line-height: 1.6; font-size: 14px; }
+  #dep-buttons { display: none; justify-content: center; gap: 12px; }
+  #dep-log {
+    display: none;
+    margin-top: 16px;
+    background: #0d1017;
+    border: 1px solid #1a1e2a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    max-height: 180px;
+    overflow-y: auto;
+    text-align: left;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    white-space: pre-wrap;
+    color: #565b66;
+  }
 
-    def _ffmpeg_missing(self) -> None:
+  /* ---- Controls ---- */
+  #controls {
+    background: #131620;
+    border: 1px solid #1a1e2a;
+    border-radius: 10px;
+    padding: 20px 22px;
+  }
+  #input-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #565b66;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 8px;
+  }
+  #file-path {
+    width: 100%;
+    padding: 11px 14px;
+    background: #0d1017;
+    color: #bfbdb6;
+    border: 1px solid #1a1e2a;
+    border-radius: 8px;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #file-path:focus { border-color: #e6b450; }
+  #file-path::placeholder { color: #3d424d; }
+  #file-path:disabled { opacity: 0.4; }
+
+  #button-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  /* ---- Buttons ---- */
+  button {
+    padding: 9px 20px;
+    border: none;
+    border-radius: 8px;
+    font-family: 'DM Sans', -apple-system, sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  button:active:not(:disabled) { transform: scale(0.97); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .btn-browse { background: #1a1e2a; color: #8b919d; flex: 1; }
+  .btn-browse:hover:not(:disabled) { background: #212535; color: #bfbdb6; }
+  .btn-strip { background: #e6b450; color: #0d1017; flex: 1; }
+  .btn-strip:hover:not(:disabled) { background: #d4a43e; }
+  .btn-reset { background: #1a1e2a; color: #8b919d; display: none; }
+  .btn-reset:hover:not(:disabled) { background: #212535; color: #bfbdb6; }
+  .btn-install { background: #aad94c; color: #0d1017; }
+  .btn-install:hover:not(:disabled) { background: #99c83e; }
+  .btn-quit { background: #1a1e2a; color: #565b66; }
+  .btn-quit:hover:not(:disabled) { background: #212535; color: #bfbdb6; }
+
+  /* ---- Status ---- */
+  #status {
+    text-align: center;
+    margin-top: 12px;
+    min-height: 18px;
+    line-height: 1.5;
+    font-size: 13px;
+  }
+  .status-success { color: #aad94c; }
+  .status-error { color: #f07178; }
+  .status-warning { color: #e6b450; }
+
+  /* ---- Progress ---- */
+  #progress-bar {
+    display: none;
+    margin-top: 12px;
+    height: 3px;
+    background: #1a1e2a;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  #progress-bar .indeterminate {
+    width: 30%;
+    height: 100%;
+    background: #e6b450;
+    border-radius: 2px;
+    animation: slide 1.6s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(430%); }
+  }
+
+  /* ---- Drop Zone ---- */
+  #drop-zone {
+    border: 1px dashed #252a38;
+    border-radius: 10px;
+    padding: 32px 16px;
+    text-align: center;
+    transition: border-color 0.25s, background 0.25s;
+    cursor: default;
+  }
+  #drop-zone.drag-over {
+    border: 2px dashed #e6b450;
+    background: rgba(230, 180, 80, 0.07);
+  }
+  #drop-zone.has-file {
+    border-color: #aad94c;
+    border-style: solid;
+    background: rgba(170, 217, 76, 0.04);
+  }
+  #drop-zone.processing {
+    border-color: #e6b450;
+    border-style: solid;
+    background: rgba(230, 180, 80, 0.04);
+  }
+  #drop-label { color: #3d424d; font-size: 13px; font-weight: 500; }
+  #drop-filename {
+    display: none;
+    color: #aad94c;
+    font-weight: 600;
+    word-break: break-all;
+    font-size: 13px;
+  }
+
+  /* ---- Output ---- */
+  #output-section {
+    display: none;
+    background: #080b12;
+    border: 1px solid #1a1e2a;
+    border-radius: 10px;
+    max-height: 240px;
+    overflow: hidden;
+  }
+  #output-log {
+    padding: 14px 16px;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 1.7;
+    overflow-y: auto;
+    max-height: 236px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #565b66;
+  }
+  .log-cmd { color: #3d424d; }
+  .log-line { color: #565b66; }
+</style>
+</head>
+<body>
+
+<!-- Dependency overlay -->
+<div id="dep-overlay">
+  <div id="dep-box">
+    <div id="dep-status">Checking for ffmpeg...</div>
+    <div id="dep-log"></div>
+    <div id="dep-buttons">
+      <button class="btn-install" id="btn-install" onclick="installFfmpeg()">Install ffmpeg</button>
+      <button class="btn-quit" id="btn-quit-dep" onclick="quitApp()">Quit</button>
+    </div>
+  </div>
+</div>
+
+<div id="container">
+  <!-- Header -->
+  <div id="header">
+    <div id="title">Metadata<span>.</span>Remover</div>
+    <div id="subtitle">Strip metadata from video files</div>
+  </div>
+
+  <!-- Controls -->
+  <div id="controls">
+    <div id="input-label">File path</div>
+    <input type="text" id="file-path" placeholder="Paste a file path..." autocomplete="off" spellcheck="false">
+    <div id="button-row">
+      <button class="btn-reset" id="btn-reset" onclick="newSession()">New Session</button>
+      <button class="btn-browse" id="btn-browse" onclick="browseFile()">Browse</button>
+      <button class="btn-strip" id="btn-strip" onclick="stripMetadata()">Strip Metadata</button>
+    </div>
+    <div id="status"></div>
+    <div id="progress-bar"><div class="indeterminate"></div></div>
+  </div>
+
+  <!-- Drop zone -->
+  <div id="drop-zone">
+    <div id="drop-label">drag & drop video file here</div>
+    <div id="drop-filename"></div>
+  </div>
+
+  <!-- Section 3: Output log (hidden until processing) -->
+  <div id="output-section">
+    <div id="output-log"></div>
+  </div>
+</div>
+
+<script>
+// ---- State ----
+let processing = false;
+
+// ---- DOM refs ----
+const dropZone      = document.getElementById('drop-zone');
+const dropLabel     = document.getElementById('drop-label');
+const dropFilename  = document.getElementById('drop-filename');
+const filePathInput = document.getElementById('file-path');
+const btnBrowse     = document.getElementById('btn-browse');
+const btnStrip      = document.getElementById('btn-strip');
+const btnReset      = document.getElementById('btn-reset');
+const statusEl      = document.getElementById('status');
+const progressBar   = document.getElementById('progress-bar');
+const outputSection = document.getElementById('output-section');
+const outputLog     = document.getElementById('output-log');
+const depOverlay    = document.getElementById('dep-overlay');
+const depStatus     = document.getElementById('dep-status');
+const depButtons    = document.getElementById('dep-buttons');
+const depLog        = document.getElementById('dep-log');
+
+// ---- Startup: check ffmpeg ----
+window.addEventListener('pywebviewready', function() {
+    depOverlay.classList.add('visible');
+    pywebview.api.check_ffmpeg().then(function(result) {
+        if (result.found) {
+            depStatus.innerHTML = '<span class="status-success">ffmpeg found!</span> Launching...';
+            setTimeout(function() { depOverlay.classList.remove('visible'); }, 800);
+        } else {
+            depStatus.innerHTML = result.message;
+            depButtons.style.display = 'flex';
+            if (!result.can_install) {
+                document.getElementById('btn-install').style.display = 'none';
+            }
+        }
+    });
+});
+
+// ---- Dependency install ----
+function installFfmpeg() {
+    document.getElementById('btn-install').disabled = true;
+    document.getElementById('btn-quit-dep').disabled = true;
+    depStatus.textContent = 'Installing ffmpeg... this may take a few minutes.';
+    depLog.style.display = 'block';
+    pywebview.api.install_ffmpeg().then(function(result) {
+        if (result.success) {
+            depStatus.innerHTML = '<span class="status-success">ffmpeg installed!</span> Launching...';
+            depButtons.style.display = 'none';
+            setTimeout(function() { depOverlay.classList.remove('visible'); }, 800);
+        } else {
+            depStatus.innerHTML = '<span class="status-error">' + result.message + '</span>';
+            document.getElementById('btn-quit-dep').disabled = false;
+        }
+    });
+}
+
+function quitApp() {
+    pywebview.api.quit_app();
+}
+
+// ---- Browse ----
+function browseFile() {
+    if (processing) return;
+    pywebview.api.browse_file().then(function(path) {
+        if (path) {
+            filePathInput.value = path;
+            onPathChanged(path);
+        }
+    });
+}
+
+// ---- Strip metadata (manual button) ----
+function stripMetadata() {
+    var path = filePathInput.value.trim();
+    if (!path || processing) return;
+    pywebview.api.validate_and_strip(path);
+}
+
+// ---- Input change with debounce ----
+var debounceTimer = null;
+filePathInput.addEventListener('input', function() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function() {
+        onPathChanged(filePathInput.value.trim());
+    }, 300);
+});
+
+function onPathChanged(path) {
+    if (!path) {
+        dropZone.className = '';
+        dropLabel.style.display = '';
+        dropFilename.style.display = 'none';
+        return;
+    }
+    pywebview.api.validate_and_strip(path);
+}
+
+// ---- Drag & drop visual feedback (JS-only, Python handles actual drop) ----
+var dragCounter = 0;
+dropZone.addEventListener('dragenter', function(e) { e.preventDefault(); dragCounter++; dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', function(e) { e.preventDefault(); dragCounter--; if (dragCounter <= 0) { dragCounter = 0; dropZone.classList.remove('drag-over'); } });
+dropZone.addEventListener('dragover', function(e) { e.preventDefault(); });
+dropZone.addEventListener('drop', function(e) { e.preventDefault(); dragCounter = 0; dropZone.classList.remove('drag-over'); });
+
+// Also handle drops on the whole document so files dragged anywhere work
+document.addEventListener('dragover', function(e) { e.preventDefault(); });
+document.addEventListener('drop', function(e) { e.preventDefault(); });
+
+// ---- Functions called from Python via evaluate_js ----
+
+function setDropFile(filename) {
+    dropLabel.style.display = 'none';
+    dropFilename.style.display = '';
+    dropFilename.textContent = filename;
+    dropZone.className = 'has-file';
+}
+
+function setProcessing(isProcessing) {
+    processing = isProcessing;
+    btnBrowse.disabled = isProcessing;
+    btnStrip.disabled = isProcessing;
+    filePathInput.disabled = isProcessing;
+    progressBar.style.display = isProcessing ? 'block' : 'none';
+    if (isProcessing) {
+        btnReset.style.display = 'none';
+        dropZone.classList.add('processing');
+        dropZone.classList.remove('has-file');
+        outputSection.style.display = 'block';
+        outputLog.innerHTML = '';
+    } else {
+        btnReset.style.display = 'inline-block';
+        dropZone.classList.remove('processing');
+        dropZone.classList.remove('has-file');
+        dropLabel.style.display = '';
+        dropFilename.style.display = 'none';
+    }
+}
+
+function setStatus(html, cls) {
+    statusEl.innerHTML = html;
+    statusEl.className = cls || '';
+}
+
+function appendLog(text, cls) {
+    var line = document.createElement('div');
+    line.className = cls || 'log-line';
+    line.textContent = text;
+    outputLog.appendChild(line);
+    outputLog.scrollTop = outputLog.scrollHeight;
+}
+
+function setFilePath(path) {
+    filePathInput.value = path;
+}
+
+function newSession() {
+    processing = false;
+    filePathInput.value = '';
+    filePathInput.disabled = false;
+    btnBrowse.disabled = false;
+    btnStrip.disabled = false;
+    btnReset.style.display = 'none';
+    statusEl.innerHTML = '';
+    statusEl.className = '';
+    progressBar.style.display = 'none';
+    outputSection.style.display = 'none';
+    outputLog.innerHTML = '';
+    dropZone.className = '';
+    dropLabel.style.display = '';
+    dropFilename.style.display = 'none';
+}
+
+function appendDepLog(text) {
+    depLog.textContent += text + '\\n';
+    depLog.scrollTop = depLog.scrollHeight;
+}
+</script>
+</body>
+</html>"""
+
+
+# ─── Api class ───────────────────────────────────────────────────
+
+class Api:
+    """Exposed to JavaScript via js_api. Methods run in background threads."""
+
+    def __init__(self) -> None:
+        self._window: webview.Window | None = None
+        self._lock = threading.Lock()
+
+    def set_window(self, window: webview.Window) -> None:
+        self._window = window
+
+    # ---- Dependency checking ----
+
+    def check_ffmpeg(self) -> dict:
+        if find_ffmpeg():
+            return {"found": True, "message": "", "can_install": False}
+
         system = platform.system()
         if system == "Darwin":
             brew = find_brew()
             if brew:
-                msg = "[$error]ffmpeg not found.[/$error]\n\nInstall via Homebrew?"
+                msg = '<span class="status-error">ffmpeg not found.</span><br><br>Install via Homebrew?'
             else:
                 msg = (
-                    "[$error]ffmpeg not found.[/$error]\n\n"
-                    "Homebrew is also not installed.\n"
+                    '<span class="status-error">ffmpeg not found.</span><br><br>'
+                    "Homebrew is also not installed.<br>"
                     "We'll install Homebrew first, then ffmpeg."
                 )
+            return {"found": False, "message": msg, "can_install": True}
         elif system == "Linux":
-            msg = "[$error]ffmpeg not found.[/$error]\n\nInstall via apt?"
+            return {
+                "found": False,
+                "message": '<span class="status-error">ffmpeg not found.</span><br><br>Install via apt?',
+                "can_install": True,
+            }
         else:
-            msg = (
-                "[$error]ffmpeg not found.[/$error]\n\n"
-                "Please install ffmpeg manually and re-run this app."
-            )
-        self.query_one("#dep-status", Static).update(msg)
-        self.query_one("#install", Button).display = True
-        self.query_one("#quit", Button).display = True
-        if system not in ("Darwin", "Linux"):
-            self.query_one("#install", Button).display = False
+            return {
+                "found": False,
+                "message": (
+                    '<span class="status-error">ffmpeg not found.</span><br><br>'
+                    "Please install ffmpeg manually and re-run."
+                ),
+                "can_install": False,
+            }
 
-    @on(Button.Pressed, "#quit")
-    def handle_quit(self) -> None:
-        self.app.exit()
-
-    @on(Button.Pressed, "#install")
-    def handle_install(self) -> None:
-        self.query_one("#install", Button).disabled = True
-        self.query_one("#quit", Button).disabled = True
-        self.query_one("#dep-status", Static).update("Installing... (the app will pause to use your terminal)")
-        self.set_timer(0.5, self._run_install)
-
-    def _run_install(self) -> None:
+    def install_ffmpeg(self) -> dict:
         system = platform.system()
-        if system == "Darwin":
-            self._install_macos()
-        elif system == "Linux":
-            self._install_linux()
+        try:
+            if system == "Darwin":
+                brew = find_brew()
+                if not brew:
+                    self._run_and_stream(
+                        ["/bin/bash", "-c",
+                         "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash"],
+                        log_target="dep",
+                    )
+                    brew = find_brew()
+                    if not brew:
+                        return {"success": False, "message": "Homebrew installation failed."}
+                self._run_and_stream([brew, "install", "ffmpeg"], log_target="dep")
+            elif system == "Linux":
+                self._run_and_stream(["sudo", "apt-get", "update"], log_target="dep")
+                self._run_and_stream(["sudo", "apt-get", "install", "-y", "ffmpeg"], log_target="dep")
 
-    def _run_in_terminal(self, banner: str, cmd: list[str]) -> None:
-        with self.app.suspend():
-            print(f"\n--- {banner} ---\n")
-            subprocess.run(cmd)
-            print("\nPress Enter to continue...")
-            input()
+            if find_ffmpeg():
+                return {"success": True, "message": ""}
+            else:
+                return {"success": False, "message": "ffmpeg still not found after installation."}
+        except Exception as exc:
+            return {"success": False, "message": str(exc)}
 
-    def _install_macos(self) -> None:
-        brew = find_brew()
-        if not brew:
-            self._run_in_terminal(
-                "Installing Homebrew",
-                ["/bin/bash", "-c", 'curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash'],
-            )
-            brew = find_brew()
-            if not brew:
-                self.query_one("#dep-status", Static).update(
-                    "[$error]Homebrew installation failed or not found in PATH.[/$error]\n"
-                    "Please install Homebrew manually and re-run."
-                )
-                self.query_one("#quit", Button).disabled = False
-                return
+    def quit_app(self) -> None:
+        if self._window:
+            self._window.destroy()
 
-        self._run_in_terminal("Installing ffmpeg via Homebrew", [brew, "install", "ffmpeg"])
-        self._verify_install()
+    # ---- File browsing ----
 
-    def _install_linux(self) -> None:
-        self._run_in_terminal(
-            "Installing ffmpeg",
-            ["sudo", "apt-get", "update"],
+    def browse_file(self) -> str | None:
+        if not self._window:
+            return None
+        extensions = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_EXTENSIONS))
+        file_types = (f"Video Files ({extensions})",)
+        result = self._window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            file_types=file_types,
         )
-        self._run_in_terminal(
-            "Installing ffmpeg (apt-get install)",
-            ["sudo", "apt-get", "install", "-y", "ffmpeg"],
-        )
-        self._verify_install()
+        if result and len(result) > 0:
+            return result[0]
+        return None
 
-    def _verify_install(self) -> None:
-        if shutil.which("ffmpeg"):
-            self._dismiss_success("[$success]ffmpeg installed successfully![/$success] Launching...")
-        else:
-            self.query_one("#dep-status", Static).update(
-                "[$error]ffmpeg still not found after installation.[/$error]\n"
-                "You may need to restart your terminal or add it to PATH."
-            )
-            self.query_one("#quit", Button).disabled = False
+    # ---- Validation + strip ----
 
-
-class FileBrowserScreen(Screen[str | None]):
-    """A file browser using DirectoryTree."""
-
-    BINDINGS = [("escape", "cancel", "Cancel")]
-
-    DEFAULT_CSS = """
-    FileBrowserScreen {
-        align: center middle;
-    }
-    #browser-box {
-        width: 80;
-        height: 30;
-        border: solid $accent;
-        padding: 1 2;
-        background: $surface;
-    }
-    #browser-title {
-        text-align: center;
-        text-style: bold;
-        margin-bottom: 1;
-        color: $secondary;
-    }
-    #tree {
-        height: 1fr;
-        border: solid $panel;
-        background: $background;
-    }
-    #selected-label {
-        margin-top: 1;
-        height: 1;
-        color: $success;
-    }
-    #browser-buttons {
-        height: 3;
-        align: center middle;
-        margin-top: 1;
-    }
-    #browser-buttons Button {
-        margin: 0 2;
-        border: none;
-        min-width: 16;
-        height: 3;
-        text-style: bold;
-    }
-    #browser-buttons #select {
-        background: $primary 25%;
-        color: $primary;
-    }
-    #browser-buttons #select:hover {
-        background: $primary 40%;
-    }
-    #browser-buttons #cancel {
-        background: $panel;
-        color: $foreground 70%;
-    }
-    #browser-buttons #cancel:hover {
-        background: $panel;
-        color: $foreground;
-    }
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.selected_path: str | None = None
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="browser-box"):
-            yield Static("Browse for a video file", id="browser-title")
-            yield DirectoryTree(str(Path.home()), id="tree")
-            yield Static("", id="selected-label")
-            with Horizontal(id="browser-buttons"):
-                yield Button("Select", id="select", variant="primary", disabled=True)
-                yield Button("Cancel", id="cancel", variant="default")
-
-    @on(DirectoryTree.FileSelected)
-    def on_file_selected(self, event: DirectoryTree.FileSelected) -> None:
-        self.selected_path = str(event.path)
-        self.query_one("#selected-label", Static).update(f"Selected: {event.path.name}")
-        self.query_one("#select", Button).disabled = False
-
-    @on(Button.Pressed, "#select")
-    def handle_select(self) -> None:
-        if self.selected_path:
-            self.dismiss(self.selected_path)
-
-    @on(Button.Pressed, "#cancel")
-    def handle_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class MainScreen(Screen):
-    """Main screen — select a video and strip its metadata."""
-
-    DEFAULT_CSS = """
-    MainScreen {
-        align: center middle;
-    }
-    #main-box {
-        width: 80;
-        height: auto;
-        border: none;
-        padding: 1 2;
-        background: $surface;
-    }
-    #title {
-        text-align: center;
-        text-style: bold;
-        color: $primary;
-        margin-bottom: 1;
-    }
-    #drop-zone {
-        width: 100%;
-        height: 9;
-        border: none;
-        padding: 1 2;
-        margin-bottom: 1;
-        background: $background;
-    }
-    #drop-zone:focus-within {
-        border: none;
-    }
-    #drop-zone.has-file {
-        border: solid $success;
-        background: $success 8%;
-    }
-    #drop-zone.processing {
-        border: solid $warning;
-        background: $warning 8%;
-    }
-    #drop-hint {
-        text-align: center;
-        color: $secondary 60%;
-        width: 100%;
-        margin-bottom: 2;
-    }
-    #drop-filename {
-        text-align: center;
-        text-style: bold;
-        color: $success;
-        width: 100%;
-        display: none;
-    }
-    #file-path {
-        width: 100%;
-        background: transparent;
-        color: $foreground;
-        border: none;
-    }
-    #file-path:focus {
-        border: none;
-    }
-    #secondary-row {
-        height: 3;
-        align: center middle;
-        margin-top: 1;
-    }
-    #secondary-row Button {
-        margin: 0 1;
-        border: none;
-        min-width: 20;
-        height: 3;
-        text-style: bold;
-    }
-    #secondary-row #browse {
-        background: $panel;
-        color: $secondary;
-    }
-    #secondary-row #browse:hover {
-        background: $secondary 20%;
-    }
-    #secondary-row #strip {
-        background: $primary 25%;
-        color: $primary;
-    }
-    #secondary-row #strip:hover {
-        background: $primary 40%;
-    }
-    #status {
-        text-align: center;
-        margin-top: 1;
-        height: auto;
-        min-height: 1;
-        color: $foreground;
-    }
-    #progress {
-        margin-top: 1;
-        display: none;
-    }
-    #log {
-        height: 10;
-        border: solid $panel;
-        background: $background;
-        margin-top: 1;
-        display: none;
-    }
-    #quit-btn {
-        dock: top;
-        width: auto;
-        min-width: 10;
-        height: 3;
-        margin: 1 2;
-        background: $success 15%;
-        color: $success;
-        border: none;
-        text-style: bold;
-    }
-    #quit-btn:hover {
-        background: $success 30%;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="main-box"):
-            yield Static("METADATA REMOVER", id="title")
-            with Vertical(id="drop-zone"):
-                yield Static(
-                    "Drag & drop a video file here",
-                    id="drop-hint",
-                )
-                yield Static("", id="drop-filename")
-                yield Input(
-                    placeholder="or type / paste a file path...",
-                    id="file-path",
-                )
-            with Horizontal(id="secondary-row"):
-                yield Button("Browse", id="browse", variant="default")
-                yield Button("Strip Metadata", id="strip", variant="primary")
-            yield Static("", id="status")
-            yield ProgressBar(id="progress", total=None, show_eta=False)
-            yield RichLog(id="log", highlight=True, markup=True)
-        yield Button("Quit", id="quit-btn")
-        yield GridBackground()
-
-    def _clean_path(self, raw: str) -> str:
-        """Strip surrounding quotes and trailing whitespace from pasted paths."""
-        cleaned = raw.strip()
-        if (cleaned.startswith("'") and cleaned.endswith("'")) or (
-            cleaned.startswith('"') and cleaned.endswith('"')
-        ):
-            cleaned = cleaned[1:-1]
-        return cleaned
-
-    @on(Input.Changed, "#file-path")
-    def on_path_changed(self, event: Input.Changed) -> None:
-        """Auto-detect a valid video file and start stripping immediately."""
-        raw = event.value
-        path_str = self._clean_path(raw)
-        drop_zone = self.query_one("#drop-zone")
-        hint = self.query_one("#drop-hint", Static)
-        filename_label = self.query_one("#drop-filename", Static)
-
-        if not path_str:
-            drop_zone.remove_class("has-file")
-            hint.display = True
-            filename_label.display = False
-            return
-
+    def validate_and_strip(self, path_str: str) -> None:
+        path_str = self._clean_path(path_str)
         result = validate_video_file(path_str)
-        if isinstance(result, Path):
-            drop_zone.add_class("has-file")
-            hint.display = False
-            filename_label.update(f"{result.name}")
-            filename_label.display = True
-            if path_str != raw:
-                self.query_one("#file-path", Input).value = path_str
-                return  # the normalised change will re-trigger this handler
-            self._start_strip(result)
 
-    @on(Button.Pressed, "#quit-btn")
-    def handle_quit(self) -> None:
-        self.app.exit()
-
-    @on(Button.Pressed, "#browse")
-    def handle_browse(self) -> None:
-        self.action_browse()
-
-    def action_browse(self) -> None:
-        def on_file_chosen(path: str | None) -> None:
-            if path:
-                self.query_one("#file-path", Input).value = path
-
-        self.app.push_screen(FileBrowserScreen(), callback=on_file_chosen)
-
-    @on(Button.Pressed, "#strip")
-    def handle_strip(self) -> None:
-        path_str = self._clean_path(self.query_one("#file-path", Input).value)
-        result = validate_video_file(path_str)
         if isinstance(result, str):
-            self.query_one("#status", Static).update(f"[$error]{result}[/$error]")
+            self._eval(f"setStatus({self._js(result)}, 'status-error')")
             return
-        self._start_strip(result)
 
-    def _start_strip(self, resolved_path: Path) -> None:
-        self._set_controls_disabled(True)
-        self.query_one("#status", Static).update("[$warning]Stripping metadata...[/$warning]")
-        self.query_one("#progress", ProgressBar).display = True
-        log = self.query_one("#log", RichLog)
-        log.display = True
-        log.clear()
-        self.strip_metadata(resolved_path)
+        self._eval(f"setDropFile({self._js(result.name)})")
+        self._eval(f"setFilePath({self._js(str(result))})")
 
-    @work(thread=True)
-    def strip_metadata(self, input_path: Path) -> None:
+        if not self._lock.acquire(blocking=False):
+            return  # already processing
+        try:
+            self._strip_metadata(result)
+        finally:
+            self._lock.release()
+
+    # ---- Core strip logic ----
+
+    def _strip_metadata(self, input_path: Path) -> None:
+        self._eval("setProcessing(true)")
+        self._eval("setStatus('Stripping metadata...', 'status-warning')")
+
         output_path = get_output_path(input_path)
-
+        ffmpeg_bin = find_ffmpeg() or "ffmpeg"
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_bin, "-y",
             "-i", str(input_path),
             "-map_metadata", "-1",
             "-map_chapters", "-1",
@@ -684,8 +669,7 @@ class MainScreen(Screen):
             str(output_path),
         ]
 
-        log = self.query_one("#log", RichLog)
-        self.app.call_from_thread(log.write, f"[dim]$ {' '.join(cmd)}[/dim]")
+        self._eval(f"appendLog({self._js('$ ' + ' '.join(cmd))}, 'log-cmd')")
 
         try:
             process = subprocess.Popen(
@@ -696,71 +680,95 @@ class MainScreen(Screen):
                 bufsize=1,
             )
             for line in process.stdout:  # type: ignore[union-attr]
-                self.app.call_from_thread(log.write, line.rstrip())
+                self._eval(f"appendLog({self._js(line.rstrip())}, 'log-line')")
             process.wait()
         except FileNotFoundError:
-            self.app.call_from_thread(self._on_strip_done, "[$error]Error: ffmpeg not found in PATH.[/$error]")
+            self._eval("setProcessing(false)")
+            self._eval("setStatus('Error: ffmpeg not found in PATH.', 'status-error')")
             return
         except Exception as exc:
-            self.app.call_from_thread(self._on_strip_done, f"[$error]Error: {exc}[/$error]")
+            self._eval("setProcessing(false)")
+            self._eval(f"setStatus({self._js(f'Error: {exc}')}, 'status-error')")
             return
 
+        self._eval("setProcessing(false)")
         if process.returncode == 0:
-            self.app.call_from_thread(
-                self._on_strip_done,
-                f"[$success]Done![/$success] Saved to:\n{output_path}",
-            )
+            msg = f"Done! Saved to:<br>{output_path}"
+            self._eval(f"setStatus({self._js(msg)}, 'status-success')")
         else:
             if output_path.exists():
                 output_path.unlink()
-            self.app.call_from_thread(
-                self._on_strip_done,
-                f"[$error]Error: ffmpeg exited with code {process.returncode}[/$error]",
+            self._eval(
+                f"setStatus('Error: ffmpeg exited with code {process.returncode}', 'status-error')"
             )
 
-    def _on_strip_done(self, message: str) -> None:
-        self.query_one("#status", Static).update(message)
-        self.query_one("#progress", ProgressBar).display = False
-        self._set_controls_disabled(False)
+    # ---- Helpers ----
 
-    def _set_controls_disabled(self, disabled: bool) -> None:
-        for sel, cls in (("#strip", Button), ("#browse", Button), ("#file-path", Input)):
-            self.query_one(sel, cls).disabled = disabled
-        drop_zone = self.query_one("#drop-zone")
-        if disabled:
-            drop_zone.add_class("processing")
-        else:
-            drop_zone.remove_class("processing")
+    def _run_and_stream(self, cmd: list[str], log_target: str = "output") -> None:
+        append_fn = "appendDepLog" if log_target == "dep" else "appendLog"
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        for line in process.stdout:  # type: ignore[union-attr]
+            self._eval(f"{append_fn}({self._js(line.rstrip())})")
+        process.wait()
 
+    def _eval(self, js_code: str) -> None:
+        if self._window:
+            self._window.evaluate_js(js_code)
 
-class MetadataRemoverApp(App):
-    """A TUI application to strip metadata from video files."""
+    @staticmethod
+    def _clean_path(raw: str) -> str:
+        cleaned = raw.strip()
+        if (cleaned.startswith("'") and cleaned.endswith("'")) or \
+           (cleaned.startswith('"') and cleaned.endswith('"')):
+            cleaned = cleaned[1:-1]
+        return cleaned
 
-    TITLE = "Metadata Remover"
-    CSS = """
-    Screen {
-        background: $background;
-        layers: below default;
-    }
-    ProgressBar Bar > .bar--bar {
-        color: $primary;
-    }
-    ProgressBar Bar > .bar--indeterminate {
-        color: $secondary;
-    }
-    """
-
-    def on_mount(self) -> None:
-        self.register_theme(CYBER_THEME)
-        self.theme = "cyberpunk"
-
-        def on_dep_check(result: bool) -> None:
-            if result:
-                self.push_screen(MainScreen())
-
-        self.push_screen(DependencyScreen(), callback=on_dep_check)
+    @staticmethod
+    def _js(s: str) -> str:
+        """Escape a Python string for safe embedding in JS."""
+        return json.dumps(s)
 
 
+# ─── Drag & drop (Python-side for pywebviewFullPath) ─────────────
+
+def _on_drop(e: dict) -> None:
+    files = e.get("dataTransfer", {}).get("files", [])
+    if not files:
+        return
+    full_path = files[0].get("pywebviewFullPath")
+    if full_path:
+        api.validate_and_strip(full_path)
+
+
+def _on_drag(e: dict) -> None:
+    pass  # preventDefault handled by DOMEventHandler flags
+
+
+def _bind_events(window: webview.Window) -> None:
+    from webview.dom import DOMEventHandler
+    window.dom.document.events.dragenter += DOMEventHandler(_on_drag, True, True)
+    window.dom.document.events.dragover += DOMEventHandler(_on_drag, True, True)
+    window.dom.document.events.drop += DOMEventHandler(_on_drop, True, True)
+
+
+# ─── Entry point ─────────────────────────────────────────────────
+
+api = Api()
 
 if __name__ == "__main__":
-    MetadataRemoverApp().run()
+    window = webview.create_window(
+        title="Metadata Remover",
+        html=HTML,
+        js_api=api,
+        width=720,
+        height=820,
+        resizable=True,
+        background_color="#0d1017",
+        text_select=False,
+        min_size=(480, 600),
+    )
+    api.set_window(window)
+    window.events.loaded += _bind_events
+    webview.start(debug=False)
