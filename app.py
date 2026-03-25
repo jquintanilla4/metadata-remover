@@ -51,26 +51,23 @@ def validate_video_file(path_str: str) -> Path | str:
     return p
 
 
-def find_brew() -> str | None:
-    """Return the path to brew, checking common locations."""
-    brew = shutil.which("brew")
-    if brew:
-        return brew
-    for candidate in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+def _find_executable(name: str, candidates: list[str]) -> str | None:
+    """Return the path to *name*, checking PATH then known locations."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for candidate in candidates:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return None
+
+
+def find_brew() -> str | None:
+    return _find_executable("brew", ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"])
 
 
 def find_ffmpeg() -> str | None:
-    """Return the path to ffmpeg, checking common locations."""
-    ff = shutil.which("ffmpeg")
-    if ff:
-        return ff
-    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+    return _find_executable("ffmpeg", ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"])
 
 
 # ─── HTML ────────────────────────────────────────────────────────
@@ -232,6 +229,7 @@ HTML = """<!DOCTYPE html>
     min-height: 18px;
     line-height: 1.5;
     font-size: 13px;
+    word-break: break-all;
   }
   .status-success { color: #aad94c; }
   .status-error { color: #f07178; }
@@ -354,7 +352,6 @@ HTML = """<!DOCTYPE html>
     <div id="drop-filename"></div>
   </div>
 
-  <!-- Section 3: Output log (hidden until processing) -->
   <div id="output-section">
     <div id="output-log"></div>
   </div>
@@ -410,7 +407,8 @@ function installFfmpeg() {
             depButtons.style.display = 'none';
             setTimeout(function() { depOverlay.classList.remove('visible'); }, 800);
         } else {
-            depStatus.innerHTML = '<span class="status-error">' + result.message + '</span>';
+            depStatus.textContent = result.message;
+            depStatus.className = 'status-error';
             document.getElementById('btn-quit-dep').disabled = false;
         }
     });
@@ -454,7 +452,7 @@ function onPathChanged(path) {
         dropFilename.style.display = 'none';
         return;
     }
-    pywebview.api.validate_and_strip(path);
+    pywebview.api.validate_path(path);
 }
 
 // ---- Drag & drop visual feedback (JS-only, Python handles actual drop) ----
@@ -474,7 +472,8 @@ function setDropFile(filename) {
     dropLabel.style.display = 'none';
     dropFilename.style.display = '';
     dropFilename.textContent = filename;
-    dropZone.className = 'has-file';
+    dropZone.classList.remove('drag-over', 'processing');
+    dropZone.classList.add('has-file');
 }
 
 function setProcessing(isProcessing) {
@@ -516,20 +515,13 @@ function setFilePath(path) {
 }
 
 function newSession() {
-    processing = false;
-    filePathInput.value = '';
-    filePathInput.disabled = false;
-    btnBrowse.disabled = false;
-    btnStrip.disabled = false;
+    setProcessing(false);
     btnReset.style.display = 'none';
+    filePathInput.value = '';
     statusEl.innerHTML = '';
     statusEl.className = '';
-    progressBar.style.display = 'none';
     outputSection.style.display = 'none';
     outputLog.innerHTML = '';
-    dropZone.className = '';
-    dropLabel.style.display = '';
-    dropFilename.style.display = 'none';
 }
 
 function appendDepLog(text) {
@@ -628,27 +620,40 @@ class Api:
             webview.OPEN_DIALOG,
             file_types=file_types,
         )
-        if result and len(result) > 0:
+        if result:
             return result[0]
         return None
 
-    # ---- Validation + strip ----
+    # ---- Validation ----
 
-    def validate_and_strip(self, path_str: str) -> None:
+    def _validate(self, path_str: str) -> Path | None:
+        """Validate and update the UI. Return the Path on success, None on failure."""
         path_str = self._clean_path(path_str)
         result = validate_video_file(path_str)
 
         if isinstance(result, str):
             self._eval(f"setStatus({self._js(result)}, 'status-error')")
-            return
+            return None
 
         self._eval(f"setDropFile({self._js(result.name)})")
         self._eval(f"setFilePath({self._js(str(result))})")
+        return result
+
+    def validate_path(self, path_str: str) -> None:
+        """Validate only (called from debounced input). Does not start stripping."""
+        self._validate(path_str)
+
+    # ---- Validation + strip ----
+
+    def validate_and_strip(self, path_str: str) -> None:
+        path = self._validate(path_str)
+        if path is None:
+            return
 
         if not self._lock.acquire(blocking=False):
             return  # already processing
         try:
-            self._strip_metadata(result)
+            self._strip_metadata(path)
         finally:
             self._lock.release()
 
@@ -704,7 +709,7 @@ class Api:
 
     # ---- Helpers ----
 
-    def _run_and_stream(self, cmd: list[str], log_target: str = "output") -> None:
+    def _run_and_stream(self, cmd: list[str], log_target: str = "output") -> int:
         append_fn = "appendDepLog" if log_target == "dep" else "appendLog"
         process = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -712,6 +717,7 @@ class Api:
         for line in process.stdout:  # type: ignore[union-attr]
             self._eval(f"{append_fn}({self._js(line.rstrip())})")
         process.wait()
+        return process.returncode
 
     def _eval(self, js_code: str) -> None:
         if self._window:
@@ -734,6 +740,8 @@ class Api:
 # ─── Drag & drop (Python-side for pywebviewFullPath) ─────────────
 
 def _on_drop(e: dict) -> None:
+    if api._lock.locked():
+        return  # already processing
     files = e.get("dataTransfer", {}).get("files", [])
     if not files:
         return
