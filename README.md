@@ -1,14 +1,18 @@
 # Metadata Remover
 
-A macOS-first Electron desktop app that strips metadata from video files with the user's installed `ffmpeg`.
+Metadata Remover is a desktop app that removes metadata from video files without re-encoding the video. It is built with Electron and uses the `ffmpeg` already installed on the user's machine.
 
-## Features
+The current app is macOS-first. It includes a guided setup flow for `ffmpeg` and Homebrew so the app can help users get ready before they process a file.
 
-- Drag and drop a video file into the app
-- Browse for a file with the native macOS file picker
+## What The App Does
+
+- Drag and drop a video file to start processing right away
+- Browse for a file with the native file picker
 - Paste a file path manually
-- Stream `ffmpeg` output live in the UI
-- Save the cleaned copy next to the original with a `_clean` suffix
+- Check that the file exists, is supported, and can be written back out safely
+- Show the exact `ffmpeg` command and live output in the app
+- Save the cleaned file next to the original
+- Automatically avoid filename collisions with `_clean`, `_clean_1`, `_clean_2`, and so on
 
 ## How It Works
 
@@ -18,32 +22,30 @@ When you provide a video file, the app runs:
 ffmpeg -y -i input.mp4 -map_metadata -1 -map_chapters -1 -c copy output_clean.mp4
 ```
 
-- `-map_metadata -1` removes global, stream, and chapter metadata
+- `-map_metadata -1` removes metadata
 - `-map_chapters -1` removes chapter markers
-- `-c copy` copies streams without re-encoding
+- `-c copy` keeps the original audio and video streams without re-encoding
 
-If `output_clean.ext` already exists, the app writes `output_clean_1.ext`, `output_clean_2.ext`, and so on.
+Because the file is copied instead of re-encoded, processing is usually fast and does not reduce video quality.
 
 ## Supported Formats
 
 `.mp4` `.mkv` `.avi` `.mov` `.wmv` `.flv` `.webm` `.m4v` `.mpg` `.mpeg` `.3gp` `.ts`
 
-## ffmpeg Dependency Flow
+## ffmpeg Setup In The App
 
-The app uses the user's local `ffmpeg`.
+On startup, the app checks for `ffmpeg` in:
 
-On startup it checks:
-
-- `PATH`
+- your `PATH`
 - `/opt/homebrew/bin/ffmpeg`
 - `/usr/local/bin/ffmpeg`
 
-If `ffmpeg` is missing on macOS:
+If `ffmpeg` is missing:
 
-- If Homebrew exists, the app offers a one-click `brew install ffmpeg`
-- If Homebrew is missing, the app shows the official Homebrew install command and link, then asks the user to retry after Homebrew is installed
+- and Homebrew is already installed, the app offers an in-app `Install ffmpeg` button
+- and Homebrew is not installed yet, the app shows the Homebrew install command, lets the user copy it, and links to the official Homebrew website
 
-## Development
+## Run The App For Development
 
 Install dependencies:
 
@@ -51,49 +53,73 @@ Install dependencies:
 npm install
 ```
 
-Run the Electron app:
+Start the Electron app:
 
 ```bash
 make run
 ```
 
-Typecheck:
+Type-check the project:
 
 ```bash
 make typecheck
 ```
 
-## Packaging
+## Build The App
 
-Package the app:
+This section is written for non-technical users.
+
+Building the app means creating a version you can open like a normal desktop app instead of running it from source code.
+
+1. Open the Terminal app on your Mac.
+2. Go to this project folder.
+3. Install the project tools:
+
+```bash
+npm install
+```
+
+4. Create the packaged app:
 
 ```bash
 make build
 ```
 
-This runs `npm run package` and writes the packaged app under `out/`.
+After `make build` finishes, look in the `out/` folder. That folder will contain a packaged copy of the app.
 
-Make macOS distributables:
+If you want installable/shareable Mac files such as a `.dmg` and `.zip`, run:
 
 ```bash
 make app
 ```
 
-This runs `npm run make` and writes distributables under `out/make`, including:
+After `make app` finishes, look in `out/make/`.
 
-- a `.zip`
-- a `.dmg`
+You should find:
+
+- a `.dmg` file you can open and install like a normal Mac app
+- a `.zip` file you can send to someone else or keep as a packaged build
+
+### Build Commands At A Glance
+
+- `make build`: creates a packaged app in `out/`
+- `make app`: creates Mac distributables in `out/make/`
+- `make run`: launches the app for local development
+- `make typecheck`: checks TypeScript for type errors
 
 ## Project Structure
 
 ```text
-src/main.ts             Electron main process
-src/preload.ts          Secure preload bridge
+src/main.ts             Electron main process and ffmpeg/Homebrew integration
+src/preload.ts          Secure renderer bridge
 src/App.tsx             React UI
 src/styles.css          App styles
+src/shared/constants.ts Shared app constants
+src/shared/types.ts     Shared TypeScript types
 forge.config.ts         Electron Forge packaging config
 webpack.*.ts            Webpack configuration used by Forge
-package.json            Node/Electron project definition
+package.json            Project scripts and dependencies
+Makefile                Shortcut commands for running and building
 ```
 
 ## License

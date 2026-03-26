@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import type {
   CommandStartResult,
@@ -12,6 +12,13 @@ const api = {
   checkDependencies: (): Promise<DependencyCheckResult> =>
     ipcRenderer.invoke('metadata:checkDependencies'),
   browseFile: (): Promise<string | null> => ipcRenderer.invoke('metadata:browseFile'),
+  getDroppedPath: (file: File): string | null => {
+    try {
+      return webUtils.getPathForFile(file) || null;
+    } catch {
+      return null;
+    }
+  },
   validatePath: (rawPath: string): Promise<ValidationResult> =>
     ipcRenderer.invoke('metadata:validatePath', rawPath),
   stripMetadata: (rawPath: string): Promise<CommandStartResult> =>

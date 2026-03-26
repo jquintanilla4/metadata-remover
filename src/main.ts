@@ -12,6 +12,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  Menu,
   shell,
 } from 'electron';
 
@@ -36,6 +37,30 @@ let stripProcess: ReturnType<typeof spawn> | null = null;
 let installProcess: ReturnType<typeof spawn> | null = null;
 
 const supportedExtensionSet = new Set<string>(SUPPORTED_EXTENSIONS);
+const isMac = process.platform === 'darwin';
+
+function createApplicationMenu(): Menu | null {
+  if (!isMac) {
+    return null;
+  }
+
+  return Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ]);
+}
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -44,9 +69,10 @@ function createMainWindow(): void {
     minWidth: 520,
     minHeight: 640,
     backgroundColor: '#0d1017',
-    autoHideMenuBar: true,
+    autoHideMenuBar: !isMac,
     show: false,
     title: 'Metadata Remover',
+    ...(isMac ? { titleBarStyle: 'hidden' as const } : {}),
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       contextIsolation: true,
@@ -388,7 +414,7 @@ function startStrip(rawPath: string): CommandStartResult {
     emitStrip({ type: 'processing', active: false });
 
     if (code === 0) {
-      updateStripStatus('success', `Done! Saved to ${outputPath}`);
+      updateStripStatus('success', 'Metadata stripped successfully.');
       return;
     }
 
@@ -460,7 +486,14 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
+app.on('before-quit', () => {
+  if (isMac) {
+    Menu.setApplicationMenu(null);
+  }
+});
+
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(createApplicationMenu());
   registerIpcHandlers();
   createMainWindow();
 });

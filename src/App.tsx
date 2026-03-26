@@ -15,9 +15,14 @@ type StatusMessage = {
 };
 
 type LogEntry = {
-  id: number;
+  id: string;
   line: string;
   kind: 'command' | 'output';
+};
+
+type InstallLogEntry = {
+  id: string;
+  line: string;
 };
 
 function eventHasFiles(event: DragEvent<HTMLElement>): boolean {
@@ -29,7 +34,13 @@ function getDroppedPath(event: DragEvent<HTMLElement>): string | null {
   if (!file) return null;
 
   const droppedFile = file as File & { path?: string };
-  return droppedFile.path ?? null;
+  const legacyPath = droppedFile.path?.trim();
+
+  if (legacyPath) {
+    return legacyPath;
+  }
+
+  return window.metadataRemover.getDroppedPath(file);
 }
 
 function statusClassName(level: StatusLevel | null): string {
@@ -57,7 +68,7 @@ export default function App() {
   const [checkingDependencies, setCheckingDependencies] = useState(true);
   const [dependencyState, setDependencyState] = useState<DependencyCheckResult | null>(null);
   const [installStatus, setInstallStatus] = useState<StatusMessage | null>(null);
-  const [installLogs, setInstallLogs] = useState<string[]>([]);
+  const [installLogs, setInstallLogs] = useState<InstallLogEntry[]>([]);
   const [installing, setInstalling] = useState(false);
 
   const [filePath, setFilePath] = useState('');
@@ -66,13 +77,22 @@ export default function App() {
   const [processing, setProcessing] = useState(false);
   const [stripStatus, setStripStatus] = useState<StatusMessage | null>(null);
   const [stripLogs, setStripLogs] = useState<LogEntry[]>([]);
+  const [processingVisible, setProcessingVisible] = useState(false);
+  const [statusFading, setStatusFading] = useState(false);
 
   const dragCounter = useRef(0);
   const logCounter = useRef(0);
   const skipNextDebouncedValidation = useRef(false);
+  const processingStartTime = useRef<number>(0);
+  const statusFadeTimers = useRef<{ show?: number; fade?: number }>({});
 
   const dependencyBlocked =
     checkingDependencies || (dependencyState !== null && dependencyState.installMode !== 'ready');
+
+  function nextLogId(prefix: 'install' | 'strip'): string {
+    logCounter.current += 1;
+    return `${prefix}-${logCounter.current}`;
+  }
 
   useEffect(() => {
     const metadataApi = window.metadataRemover;
@@ -103,10 +123,9 @@ export default function App() {
           setDropFileName(event.fileName);
           return;
         case 'log':
-          logCounter.current += 1;
           setStripLogs((current) => [
             ...current,
-            { id: logCounter.current, line: event.line, kind: event.kind },
+            { id: nextLogId('strip'), line: event.line, kind: event.kind },
           ]);
           return;
       }
@@ -127,7 +146,7 @@ export default function App() {
           }
           return;
         case 'log':
-          setInstallLogs((current) => [...current, event.line]);
+          setInstallLogs((current) => [...current, { id: nextLogId('install'), line: event.line }]);
           return;
       }
     });
@@ -162,6 +181,52 @@ export default function App() {
 
     return () => window.clearTimeout(timeout);
   }, [dependencyBlocked, filePath, processing]);
+
+  useEffect(() => {
+    if (processing) {
+      processingStartTime.current = Date.now();
+      setProcessingVisible(true);
+      return;
+    }
+
+    const elapsed = Date.now() - processingStartTime.current;
+    const remaining = Math.max(0, 800 - elapsed);
+
+    if (remaining === 0) {
+      setProcessingVisible(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setProcessingVisible(false);
+    }, remaining);
+
+    return () => window.clearTimeout(timer);
+  }, [processing]);
+
+  useEffect(() => {
+    window.clearTimeout(statusFadeTimers.current.show);
+    window.clearTimeout(statusFadeTimers.current.fade);
+    setStatusFading(false);
+
+    if (!stripStatus?.message || stripStatus.level !== 'success' || processingVisible) {
+      return;
+    }
+
+    statusFadeTimers.current.show = window.setTimeout(() => {
+      setStatusFading(true);
+
+      statusFadeTimers.current.fade = window.setTimeout(() => {
+        setStripStatus(null);
+        setStatusFading(false);
+      }, 500);
+    }, 2000);
+
+    return () => {
+      window.clearTimeout(statusFadeTimers.current.show);
+      window.clearTimeout(statusFadeTimers.current.fade);
+    };
+  }, [stripStatus, processingVisible]);
 
   async function refreshDependencies(): Promise<void> {
     setCheckingDependencies(true);
@@ -323,9 +388,11 @@ export default function App() {
 
   const showDependencyOverlay = checkingDependencies || dependencyBlocked;
   const showOutputSection = stripLogs.length > 0 || processing;
+  const showStripStatus = Boolean(stripStatus?.message) && !processing && !processingVisible;
 
   return (
     <div className="app-shell">
+      <div className="titlebar" />
       <div className="background-grid" />
 
       {showDependencyOverlay ? (
@@ -360,8 +427,8 @@ export default function App() {
               <>
                 {installLogs.length > 0 || installing ? (
                   <div className="install-log">
-                    {installLogs.map((line, index) => (
-                      <div key={`${line}-${index}`}>{line}</div>
+                    {installLogs.map((line) => (
+                      <div key={line.id}>{line.line}</div>
                     ))}
                   </div>
                 ) : null}
@@ -429,13 +496,15 @@ export default function App() {
             </button>
           </div>
 
-          <div className={statusClassName(stripStatus?.level ?? null)}>
-            {stripStatus?.message ?? ''}
-          </div>
-
-          {processing ? (
-            <div className="progress-bar">
+          {processingVisible ? (
+            <div className="progress-bar" aria-label="Metadata removal in progress" role="progressbar">
               <div className="progress-indicator" />
+            </div>
+          ) : null}
+
+          {showStripStatus ? (
+            <div className={`${statusClassName(stripStatus?.level ?? null)}${statusFading ? ' fading' : ''}`}>
+              {stripStatus?.message}
             </div>
           ) : null}
         </section>

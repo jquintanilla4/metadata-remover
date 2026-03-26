@@ -13,6 +13,7 @@ declare global {
     metadataRemover: {
       checkDependencies: () => Promise<DependencyCheckResult>;
       browseFile: () => Promise<string | null>;
+      getDroppedPath: (file: File) => string | null;
       validatePath: (path: string) => Promise<ValidationResult>;
       stripMetadata: (path: string) => Promise<CommandStartResult>;
       installFfmpeg: () => Promise<CommandStartResult>;

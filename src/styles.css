@@ -42,7 +42,17 @@ input {
 .app-shell {
   position: relative;
   min-height: 100vh;
-  overflow: hidden;
+  overflow: clip;
+}
+
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  -webkit-app-region: drag;
+  z-index: 100;
 }
 
 .background-grid {
@@ -70,6 +80,8 @@ input {
 .header {
   text-align: center;
   padding: 8px 16px 0;
+  -webkit-app-region: drag;
+  user-select: none;
 }
 
 .eyebrow {
@@ -149,12 +161,16 @@ input {
 }
 
 button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
   border: none;
   border-radius: 14px;
   padding: 11px 18px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  text-align: center;
   transition: transform 0.14s ease, background 0.18s ease, color 0.18s ease;
 }
 
@@ -198,8 +214,10 @@ button:disabled {
   margin-top: 12px;
   line-height: 1.5;
   font-size: 13px;
+  text-align: center;
   word-break: break-word;
   color: var(--muted);
+  transition: opacity 0.5s ease;
 }
 
 .status.success {
@@ -212,6 +230,10 @@ button:disabled {
 
 .status.error {
   color: var(--error);
+}
+
+.status.fading {
+  opacity: 0;
 }
 
 .progress-bar {
