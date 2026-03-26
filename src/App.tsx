@@ -45,6 +45,14 @@ function statusClassName(level: StatusLevel | null): string {
   }
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unexpected application error.';
+}
+
 export default function App() {
   const [checkingDependencies, setCheckingDependencies] = useState(true);
   const [dependencyState, setDependencyState] = useState<DependencyCheckResult | null>(null);
@@ -67,7 +75,18 @@ export default function App() {
     checkingDependencies || (dependencyState !== null && dependencyState.installMode !== 'ready');
 
   useEffect(() => {
-    const unsubscribeStrip = window.metadataRemover.onStripEvent((event: StripEvent) => {
+    const metadataApi = window.metadataRemover;
+
+    if (!metadataApi) {
+      setCheckingDependencies(false);
+      setInstallStatus({
+        level: 'error',
+        message: 'Desktop bridge unavailable. Restart the app.',
+      });
+      return;
+    }
+
+    const unsubscribeStrip = metadataApi.onStripEvent((event: StripEvent) => {
       switch (event.type) {
         case 'processing':
           setProcessing(event.active);
@@ -93,7 +112,7 @@ export default function App() {
       }
     });
 
-    const unsubscribeInstall = window.metadataRemover.onInstallEvent((event: InstallEvent) => {
+    const unsubscribeInstall = metadataApi.onInstallEvent((event: InstallEvent) => {
       switch (event.type) {
         case 'installing':
           setInstalling(event.active);
@@ -155,13 +174,28 @@ export default function App() {
         setInstallStatus(null);
         setInstallLogs([]);
       }
+    } catch (error) {
+      setDependencyState(null);
+      setInstallStatus({
+        level: 'error',
+        message: `Failed to check dependencies: ${getErrorMessage(error)}`,
+      });
     } finally {
       setCheckingDependencies(false);
     }
   }
 
   async function validatePath(rawPath: string): Promise<ValidationResult> {
-    const result = await window.metadataRemover.validatePath(rawPath);
+    let result: ValidationResult;
+
+    try {
+      result = await window.metadataRemover.validatePath(rawPath);
+    } catch (error) {
+      const message = `Failed to validate path: ${getErrorMessage(error)}`;
+      setDropFileName('');
+      setStripStatus({ level: 'error', message });
+      return { ok: false, message };
+    }
 
     if (result.ok) {
       setDropFileName(result.fileName);

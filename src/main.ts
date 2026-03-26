@@ -59,7 +59,51 @@ function createMainWindow(): void {
     mainWindow?.show();
   });
 
-  void mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  if (!app.isPackaged) {
+    mainWindow.webContents.on('did-finish-load', () => {
+      console.log('[main] renderer finished load');
+    });
+
+    mainWindow.webContents.on(
+      'did-fail-load',
+      (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        console.error('[main] did-fail-load', {
+          errorCode,
+          errorDescription,
+          validatedURL,
+          isMainFrame,
+        });
+      },
+    );
+
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      console.error('[main] render-process-gone', details);
+    });
+
+    mainWindow.webContents.on('console-message', (...args: any[]) => {
+      const [, levelOrDetails, message, line, sourceId] = args;
+      const details =
+        typeof levelOrDetails === 'object' && levelOrDetails !== null
+          ? levelOrDetails
+          : {
+              level: levelOrDetails,
+              message,
+              lineNumber: line,
+              sourceId,
+            };
+
+      console.log('[renderer]', {
+        level: details.level,
+        message: details.message,
+        line: details.lineNumber,
+        sourceId: details.sourceId,
+      });
+    });
+  }
+
+  void mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY).catch((error) => {
+    console.error('[main] failed to load renderer URL', error);
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -364,13 +408,7 @@ function startStrip(rawPath: string): CommandStartResult {
   return { started: true };
 }
 
-app.on('window-all-closed', () => {
-  app.quit();
-});
-
-app.whenReady().then(() => {
-  createMainWindow();
-
+function registerIpcHandlers(): void {
   ipcMain.handle('metadata:checkDependencies', async () => checkDependencies());
 
   ipcMain.handle('metadata:browseFile', async () => {
@@ -416,4 +454,13 @@ app.whenReady().then(() => {
   ipcMain.handle('metadata:quitApp', async () => {
     app.quit();
   });
+}
+
+app.on('window-all-closed', () => {
+  app.quit();
+});
+
+app.whenReady().then(() => {
+  registerIpcHandlers();
+  createMainWindow();
 });
